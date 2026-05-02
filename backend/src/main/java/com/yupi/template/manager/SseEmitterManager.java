@@ -80,11 +80,15 @@ public class SseEmitterManager {
     }
 
     /**
-     * 发送消息并缓冲
+     * 发送消息。缓冲规则：
+     * - 流式碎片（AGENT*_STREAMING）不缓冲，由 STREAMING_SNAPSHOT 统一恢复
+     * - 已持久化的状态事件（TITLES_GENERATED、OUTLINE_GENERATED）不缓冲，由 sendStateSnapshot 从 DB 读取发送
+     * - 其余消息（完成信号、错误等）正常缓冲回放
      */
     public void send(String taskId, String message) {
-        // 缓冲消息（用于断线重连回放）
-        bufferMessage(taskId, message);
+        if (shouldBuffer(message)) {
+            bufferMessage(taskId, message);
+        }
 
         SseEmitter emitter = emitterMap.get(taskId);
         if (emitter == null) {
@@ -100,6 +104,19 @@ public class SseEmitterManager {
             log.error("SSE 消息发送失败, taskId={}", taskId, e);
             emitterMap.remove(taskId, emitter);
         }
+    }
+
+    /**
+     * 是否需要缓冲。流式碎片和已有 DB 快照覆盖的事件不缓冲，避免重连时重复发送。
+     */
+    private boolean shouldBuffer(String message) {
+        if (message.contains("\"AGENT2_STREAMING\"") || message.contains("\"AGENT3_STREAMING\"")) {
+            return false; // 流式碎片 → STREAMING_SNAPSHOT 覆盖
+        }
+        if (message.contains("\"TITLES_GENERATED\"") || message.contains("\"OUTLINE_GENERATED\"")) {
+            return false; // 已持久化事件 → sendStateSnapshot 覆盖
+        }
+        return true;
     }
 
     /**
