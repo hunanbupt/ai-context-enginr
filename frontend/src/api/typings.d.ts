@@ -42,6 +42,11 @@ declare namespace API {
     userDescription?: string
   }
 
+  type ArticleGoBackRequest = {
+    taskId?: string
+    targetPhase?: string
+  }
+
   type ArticleCreateRequest = {
     topic?: string
     style?: string

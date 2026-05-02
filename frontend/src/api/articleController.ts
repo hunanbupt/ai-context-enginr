@@ -114,6 +114,21 @@ export async function listArticle(body: API.ArticleQueryRequest, options?: { [ke
   })
 }
 
+/** 回退阶段 POST /article/go-back */
+export async function goBackPhase(
+  body: API.ArticleGoBackRequest,
+  options?: { [key: string]: any }
+) {
+  return request<API.BaseResponseVoid>('/article/go-back', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    data: body,
+    ...(options || {}),
+  })
+}
+
 /** 获取文章生成进度(SSE) GET /article/progress/${param0} */
 export async function getProgress(
   // 叠加生成的Param类型 (非body参数swagger默认没有生成对象)

@@ -11,18 +11,24 @@ import com.yupi.template.model.dto.article.ArticleAiModifyOutlineRequest;
 import com.yupi.template.model.dto.article.ArticleConfirmOutlineRequest;
 import com.yupi.template.model.dto.article.ArticleConfirmTitleRequest;
 import com.yupi.template.model.dto.article.ArticleCreateRequest;
+import com.yupi.template.model.dto.article.ArticleGoBackRequest;
 import com.yupi.template.model.dto.article.ArticleQueryRequest;
 import com.yupi.template.model.dto.article.ArticleState;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import com.yupi.template.model.entity.User;
+import com.yupi.template.model.enums.ArticlePhaseEnum;
 import com.yupi.template.model.enums.ArticleStyleEnum;
+import com.yupi.template.model.enums.SseMessageTypeEnum;
 import com.yupi.template.model.vo.AgentExecutionStats;
 import com.yupi.template.model.vo.ArticleVO;
 import com.yupi.template.service.AgentLogService;
 import com.yupi.template.service.ArticleAsyncService;
 import com.yupi.template.service.ArticleService;
 import com.yupi.template.service.UserService;
+import com.yupi.template.utils.GsonUtils;
 import io.swagger.v3.oas.annotations.Operation;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -237,6 +243,38 @@ public class ArticleController {
         );
 
         return ResultUtils.success(modifiedOutline);
+    }
+
+    /**
+     * 回退到之前的决策阶段
+     * 例如：大纲生成完毕后，用户可以回退到标题选择阶段，重新选择标题
+     */
+    @PostMapping("/go-back")
+    @Operation(summary = "回退到之前的决策阶段")
+    public BaseResponse<Void> goBack(@RequestBody ArticleGoBackRequest request,
+                                     HttpServletRequest httpServletRequest) {
+        ThrowUtils.throwIf(request == null, ErrorCode.PARAMS_ERROR);
+        ThrowUtils.throwIf(request.getTaskId() == null || request.getTaskId().trim().isEmpty(),
+                ErrorCode.PARAMS_ERROR, "任务ID不能为空");
+        ThrowUtils.throwIf(request.getTargetPhase() == null || request.getTargetPhase().trim().isEmpty(),
+                ErrorCode.PARAMS_ERROR, "目标阶段不能为空");
+
+        ArticlePhaseEnum targetPhase = ArticlePhaseEnum.getByValue(request.getTargetPhase());
+        ThrowUtils.throwIf(targetPhase == null,
+                ErrorCode.PARAMS_ERROR, "无效的目标阶段: " + request.getTargetPhase());
+
+        User loginUser = userService.getLoginUser(httpServletRequest);
+        articleService.goBackPhase(request.getTaskId(), targetPhase, loginUser);
+
+        // 通过 SSE 通知前端阶段已回退
+        Map<String, Object> data = new HashMap<>();
+        data.put("type", SseMessageTypeEnum.PHASE_ROLLED_BACK.getValue());
+        data.put("taskId", request.getTaskId());
+        data.put("phase", targetPhase.getValue());
+        sseEmitterManager.send(request.getTaskId(), GsonUtils.toJson(data));
+
+        log.info("文章阶段回退成功, taskId={}, targetPhase={}", request.getTaskId(), targetPhase.getValue());
+        return ResultUtils.success(null);
     }
 
     /**

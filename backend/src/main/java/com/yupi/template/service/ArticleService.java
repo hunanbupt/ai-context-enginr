@@ -139,4 +139,13 @@ public interface ArticleService extends IService<Article> {
      * @return 修改后的大纲
      */
     List<ArticleState.OutlineSection> aiModifyOutline(String taskId, String modifySuggestion, User loginUser);
+
+    /**
+     * 回退到之前的决策阶段（如从大纲编辑回退到标题选择）
+     *
+     * @param taskId      任务ID
+     * @param targetPhase 目标阶段
+     * @param loginUser   当前登录用户
+     */
+    void goBackPhase(String taskId, ArticlePhaseEnum targetPhase, User loginUser);
 }

@@ -71,6 +71,11 @@ public enum SseMessageTypeEnum {
     ALL_COMPLETE("ALL_COMPLETE", "全部完成"),
 
     /**
+     * 阶段回退（用户回退到上一个决策节点）
+     */
+    PHASE_ROLLED_BACK("PHASE_ROLLED_BACK", "阶段已回退"),
+
+    /**
      * 错误
      */
     ERROR("ERROR", "错误");

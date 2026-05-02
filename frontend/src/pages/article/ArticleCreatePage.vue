@@ -144,6 +144,20 @@
 
           <!-- 大纲生成中（流式展示） -->
           <div v-else-if="currentPhase === 'OUTLINE_GENERATING'" key="outline-generating" class="outline-generating-state">
+            <!-- 回退按钮 -->
+            <div class="go-back-bar">
+              <a-button
+                :loading="goBackLoading"
+                @click="handleGoBack('TITLE_SELECTING')"
+                class="go-back-btn"
+              >
+                <template #icon>
+                  <RollbackOutlined />
+                </template>
+                返回重选标题
+              </a-button>
+            </div>
+
             <!-- 标题预览 -->
             <div v-if="article.mainTitle" class="preview-header">
               <h1 class="article-title">{{ article.mainTitle }}</h1>
@@ -177,17 +191,43 @@
           </div>
 
           <!-- 大纲编辑阶段 -->
-          <OutlineEditingStage
-            v-else-if="currentPhase === 'OUTLINE_EDITING'"
-            key="outline-editing"
-            :outline="outline"
-            :loading="confirmLoading"
-            :task-id="taskId"
-            @confirm="handleConfirmOutline"
-          />
+          <div v-else-if="currentPhase === 'OUTLINE_EDITING'" key="outline-editing" class="phase-with-goback">
+            <div class="go-back-bar">
+              <a-button
+                :loading="goBackLoading"
+                @click="handleGoBack('TITLE_SELECTING')"
+                class="go-back-btn"
+              >
+                <template #icon>
+                  <RollbackOutlined />
+                </template>
+                返回重选标题
+              </a-button>
+            </div>
+            <OutlineEditingStage
+              :outline="outline"
+              :loading="confirmLoading"
+              :task-id="taskId"
+              @confirm="handleConfirmOutline"
+            />
+          </div>
 
           <!-- 正文生成阶段 -->
           <div v-else-if="currentPhase === 'CONTENT_GENERATING'" key="content-generating" class="creating-state">
+          <!-- 回退按钮 -->
+          <div class="go-back-bar">
+            <a-button
+              :loading="goBackLoading"
+              @click="handleGoBack('OUTLINE_EDITING')"
+              class="go-back-btn"
+            >
+              <template #icon>
+                <RollbackOutlined />
+              </template>
+              返回修改大纲
+            </a-button>
+          </div>
+
           <!-- 标题预览 -->
           <div v-if="article.mainTitle" class="preview-header">
             <h1 class="article-title">{{ article.mainTitle }}</h1>
@@ -557,9 +597,10 @@ import {
   PictureOutlined,
   WarningOutlined,
   CrownOutlined,
-  FileTextOutlined
+  FileTextOutlined,
+  RollbackOutlined
 } from '@ant-design/icons-vue'
-import { createArticle, confirmTitle, confirmOutline } from '@/api/articleController'
+import { createArticle, confirmTitle, confirmOutline, goBackPhase, getArticle } from '@/api/articleController'
 import { connectSSE, closeSSE, type SSEMessage } from '@/utils/sse'
 import { isAdmin as checkIsAdmin, isVip as checkIsVip, hasQuota as checkHasQuota } from '@/utils/permission'
 import { marked } from 'marked'
@@ -612,6 +653,7 @@ const taskId = ref('')
 const errorVisible = ref(false)
 const errorMessage = ref('')
 const confirmLoading = ref(false)
+const goBackLoading = ref(false)
 
 // 实时日志
 interface RealtimeLog {
@@ -877,6 +919,47 @@ const handleSSEMessage = (msg: SSEMessage) => {
       addLog('✨ 文章创作完成！', 'success')
       break
 
+    case 'PHASE_ROLLED_BACK': {
+      const newPhase = msg.phase as string
+      currentPhase.value = newPhase
+      isCreating.value = false
+      isStreaming.value = false
+      isOutlineStreaming.value = false
+      outlineRaw.value = ''
+      goBackLoading.value = false
+
+      // 重置配图进度
+      imageCount.value = 0
+      imageProgress.value = 0
+
+      // 更新步骤指示器
+      if (newPhase === 'TITLE_SELECTING') {
+        currentStep.value = 0
+      } else if (newPhase === 'OUTLINE_EDITING') {
+        currentStep.value = 1
+      }
+
+      // 刷新文章数据（获取保留的数据 & 已清除的字段置空）
+      getArticle({ taskId: msg.taskId || taskId.value }).then((res) => {
+        const data = res.data.data
+        if (data) {
+          titleOptions.value = data.titleOptions || []
+          outline.value = data.outline || []
+          article.value.mainTitle = data.mainTitle || ''
+          article.value.subTitle = data.subTitle || ''
+          article.value.content = data.content || ''
+          article.value.fullContent = data.fullContent || ''
+          article.value.images = data.images || []
+          article.value.coverImage = data.coverImage || ''
+        }
+      }).catch((e) => {
+        console.warn('刷新文章数据失败:', e)
+      })
+
+      addLog(`已回退到: ${newPhase}`, 'info')
+      break
+    }
+
     case 'ERROR':
       errorMessage.value = msg.message || '创作失败'
       errorVisible.value = true
@@ -927,6 +1010,22 @@ const handleConfirmOutline = async (outlineData: Array<{section: number, title: 
     message.error(err.message || '确认大纲失败')
   } finally {
     confirmLoading.value = false
+  }
+}
+
+// 回退阶段
+const handleGoBack = async (targetPhase: string) => {
+  goBackLoading.value = true
+  try {
+    await goBackPhase({
+      taskId: taskId.value,
+      targetPhase
+    })
+    message.success('正在回退...')
+  } catch (error) {
+    const err = error as Error
+    message.error(err.message || '回退失败')
+    goBackLoading.value = false
   }
 }
 
@@ -2001,6 +2100,25 @@ onBeforeUnmount(() => {
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
+}
+
+/* 回退按钮栏 */
+.go-back-bar {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 16px;
+}
+
+.go-back-btn {
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+
+  &:hover {
+    color: var(--color-primary);
+    border-color: var(--color-primary);
+  }
 }
 
 /* 加载阶段样式 */

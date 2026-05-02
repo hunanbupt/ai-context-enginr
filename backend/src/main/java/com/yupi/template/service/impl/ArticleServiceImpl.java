@@ -384,11 +384,63 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
         }
     }
 
+    @Override
+    public void goBackPhase(String taskId, ArticlePhaseEnum targetPhase, User loginUser) {
+        Article article = getByTaskId(taskId);
+        ThrowUtils.throwIf(article == null, ErrorCode.NOT_FOUND_ERROR, "文章不存在");
+
+        // 校验权限
+        checkArticlePermission(article, loginUser);
+
+        // 校验回退规则
+        ArticlePhaseEnum currentPhase = ArticlePhaseEnum.getByValue(article.getPhase());
+        ThrowUtils.throwIf(currentPhase == null, ErrorCode.SYSTEM_ERROR, "当前阶段异常");
+
+        List<ArticlePhaseEnum> allowedTargets = currentPhase.getRollbackTargets();
+        ThrowUtils.throwIf(!allowedTargets.contains(targetPhase),
+                ErrorCode.OPERATION_ERROR,
+                "不允许从 " + currentPhase.getDescription() + " 回退到 " + targetPhase.getDescription());
+
+        // 清理中间数据
+        clearPhaseData(article, targetPhase);
+
+        // 更新阶段
+        article.setPhase(targetPhase.getValue());
+        this.updateById(article);
+
+        log.info("文章阶段已回退, taskId={}, {} -> {}", taskId, currentPhase.getValue(), targetPhase.getValue());
+    }
+
+    /**
+     * 清理回退时跳过阶段的中间产物
+     * 回退到某个阶段意味着该阶段之后的所有产物都应清除
+     */
+    private void clearPhaseData(Article article, ArticlePhaseEnum targetPhase) {
+        // TITLE_SELECTING：清除标题确认后的所有产物
+        if (targetPhase == ArticlePhaseEnum.TITLE_SELECTING) {
+            article.setMainTitle(null);
+            article.setSubTitle(null);
+            article.setUserDescription(null);
+            article.setOutline(null);
+            article.setContent(null);
+            article.setFullContent(null);
+            article.setImages(null);
+            article.setCoverImage(null);
+        }
+        // OUTLINE_EDITING：清除大纲确认后的所有产物
+        else if (targetPhase == ArticlePhaseEnum.OUTLINE_EDITING) {
+            article.setContent(null);
+            article.setFullContent(null);
+            article.setImages(null);
+            article.setCoverImage(null);
+        }
+    }
+
     /**
      * 判断是否为 VIP 或管理员
      */
     private boolean isVipOrAdmin(User user) {
-        return ADMIN_ROLE.equals(user.getUserRole()) || 
+        return ADMIN_ROLE.equals(user.getUserRole()) ||
                VIP_ROLE.equals(user.getUserRole());
     }
 }

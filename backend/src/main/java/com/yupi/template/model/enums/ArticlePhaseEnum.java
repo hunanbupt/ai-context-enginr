@@ -2,6 +2,8 @@ package com.yupi.template.model.enums;
 
 import lombok.Getter;
 
+import java.util.List;
+
 /**
  * 文章阶段枚举
  *
@@ -60,7 +62,7 @@ public enum ArticlePhaseEnum {
         if (targetPhase == null) {
             return false;
         }
-        
+
         // 定义合法的状态转换
         return switch (this) {
             case PENDING -> targetPhase == TITLE_GENERATING;
@@ -69,6 +71,21 @@ public enum ArticlePhaseEnum {
             case OUTLINE_GENERATING -> targetPhase == OUTLINE_EDITING;
             case OUTLINE_EDITING -> targetPhase == CONTENT_GENERATING;
             case CONTENT_GENERATING -> false; // 最终阶段，不再转换
+        };
+    }
+
+    /**
+     * 获取当前阶段可以回退到的目标阶段列表
+     * 只允许回退到"等待用户操作"的决策节点，避免并发冲突
+     *
+     * @return 可回退的目标阶段列表
+     */
+    public List<ArticlePhaseEnum> getRollbackTargets() {
+        return switch (this) {
+            case OUTLINE_GENERATING -> List.of(TITLE_SELECTING);
+            case OUTLINE_EDITING -> List.of(TITLE_SELECTING);
+            case CONTENT_GENERATING -> List.of(OUTLINE_EDITING);
+            default -> List.of();
         };
     }
 }
