@@ -152,7 +152,10 @@ public class ArticleAsyncService {
             Article articleToUpdate = articleService.getByTaskId(taskId);
             articleToUpdate.setOutline(GsonUtils.toJson(state.getOutline().getSections()));
             articleService.updateById(articleToUpdate);
-            
+
+            // 清除大纲流式累积器（完整大纲已保存到 DB）
+            sseEmitterManager.clearStreamingAccumulator(taskId);
+
             // 更新阶段为等待编辑大纲
             articleService.updatePhase(taskId, ArticlePhaseEnum.OUTLINE_EDITING);
             
@@ -235,9 +238,12 @@ public class ArticleAsyncService {
                 });
             }
             
+            // 清除正文流式累积器（完整正文即将保存到 DB）
+            sseEmitterManager.clearStreamingAccumulator(taskId);
+
             // 保存完整文章到数据库
             articleService.saveArticleContent(taskId, state);
-            
+
             // 更新状态为已完成
             articleService.updateArticleStatus(taskId, ArticleStatusEnum.COMPLETED, null);
             
@@ -266,9 +272,26 @@ public class ArticleAsyncService {
      * 处理智能体消息并推送
      */
     private void handleAgentMessage(String taskId, String message, ArticleState state) {
+        // 累积流式内容，用于断线重连后的快照恢复
+        accumulateStreamingContent(taskId, message);
+
         Map<String, Object> data = buildMessageData(message, state);
         if (data != null) {
             sseEmitterManager.send(taskId, GsonUtils.toJson(data));
+        }
+    }
+
+    /**
+     * 累积流式输出的内容（AGENT2 大纲流、AGENT3 正文流）
+     */
+    private void accumulateStreamingContent(String taskId, String message) {
+        String prefix2 = SseMessageTypeEnum.AGENT2_STREAMING.getStreamingPrefix();
+        String prefix3 = SseMessageTypeEnum.AGENT3_STREAMING.getStreamingPrefix();
+
+        if (message.startsWith(prefix2)) {
+            sseEmitterManager.accumulateStreaming(taskId, message.substring(prefix2.length()));
+        } else if (message.startsWith(prefix3)) {
+            sseEmitterManager.accumulateStreaming(taskId, message.substring(prefix3.length()));
         }
     }
 

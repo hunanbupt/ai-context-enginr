@@ -15,6 +15,7 @@ import com.yupi.template.model.dto.article.ArticleGoBackRequest;
 import com.yupi.template.model.dto.article.ArticleQueryRequest;
 import com.yupi.template.model.dto.article.ArticleState;
 
+import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -97,22 +98,64 @@ public class ArticleController {
 
     /**
      * SSE 进度推送
+     * 支持断线重连：新连接建立时会先回放缓冲消息，再发送当前状态快照（含流式内容）
      */
     @GetMapping("/progress/{taskId}")
     @Operation(summary = "获取文章生成进度(SSE)")
     public SseEmitter getProgress(@PathVariable String taskId, HttpServletRequest httpServletRequest) {
-        ThrowUtils.throwIf(taskId == null || taskId.trim().isEmpty(), 
+        ThrowUtils.throwIf(taskId == null || taskId.trim().isEmpty(),
                 ErrorCode.PARAMS_ERROR, "任务ID不能为空");
 
         // 校验权限（内部会检查任务是否存在以及用户是否有权限访问）
         User loginUser = userService.getLoginUser(httpServletRequest);
-        articleService.getArticleDetail(taskId, loginUser);
+        ArticleVO articleVO = articleService.getArticleDetail(taskId, loginUser);
 
-        // 创建 SSE Emitter
+        // 创建 SSE Emitter（内部会回放缓冲消息）
         SseEmitter emitter = sseEmitterManager.createEmitter(taskId);
-        
-        log.info("SSE 连接已建立, taskId={}", taskId);
+
+        // 发送状态快照，帮助前端恢复到当前阶段
+        sendStateSnapshot(taskId, articleVO, emitter);
+
+        log.info("SSE 连接已建立, taskId={}, phase={}", taskId, articleVO.getPhase());
         return emitter;
+    }
+
+    /**
+     * 向新连接的客户端发送当前状态快照
+     * 包含：已完成的数据（标题方案、大纲）+ 流式累积内容
+     */
+    private void sendStateSnapshot(String taskId, ArticleVO articleVO, SseEmitter emitter) {
+        try {
+            String phase = articleVO.getPhase();
+            Map<String, Object> data = new HashMap<>();
+
+            // 如果标题方案已生成，发送快照
+            if (articleVO.getTitleOptions() != null && !articleVO.getTitleOptions().isEmpty()) {
+                data.put("type", SseMessageTypeEnum.TITLES_GENERATED.getValue());
+                data.put("titleOptions", articleVO.getTitleOptions());
+                emitter.send(SseEmitter.event().data(GsonUtils.toJson(data)));
+            }
+
+            // 如果大纲已生成，发送快照
+            if (articleVO.getOutline() != null && !articleVO.getOutline().isEmpty()) {
+                data.clear();
+                data.put("type", SseMessageTypeEnum.OUTLINE_GENERATED.getValue());
+                data.put("outline", articleVO.getOutline());
+                emitter.send(SseEmitter.event().data(GsonUtils.toJson(data)));
+            }
+
+            // 如果正在流式生成中，发送已累积的流式内容快照
+            String accumulated = sseEmitterManager.getAccumulatedStreaming(taskId);
+            if (accumulated != null && !accumulated.isEmpty()) {
+                data.clear();
+                data.put("type", SseMessageTypeEnum.STREAMING_SNAPSHOT.getValue());
+                data.put("content", accumulated);
+                data.put("phase", phase);
+                emitter.send(SseEmitter.event().data(GsonUtils.toJson(data)));
+            }
+        } catch (IOException e) {
+            log.warn("SSE 状态快照发送失败, taskId={}", taskId, e);
+        }
     }
 
     /**

@@ -785,6 +785,9 @@ const startCreate = async () => {
     taskId.value = newTaskId
     addLog(`任务创建成功，ID: ${newTaskId}`, 'success')
 
+    // 将 taskId 写入 URL，便于刷新后恢复
+    router.replace({ query: { taskId: newTaskId, topic: topic.value } })
+
     // 建立 SSE 连接
     addLog('已建立实时连接，开始生成...', 'info')
     eventSource = connectSSE(taskId.value, {
@@ -960,6 +963,28 @@ const handleSSEMessage = (msg: SSEMessage) => {
       break
     }
 
+    case 'STREAMING_SNAPSHOT': {
+      const snapshotPhase = msg.phase as string
+      const snapshotContent = (msg.content as string) || ''
+
+      if (snapshotPhase === 'OUTLINE_GENERATING') {
+        currentPhase.value = 'OUTLINE_GENERATING'
+        outlineRaw.value = snapshotContent
+        isOutlineStreaming.value = true
+        isCreating.value = true
+        currentStep.value = 1
+        addLog('已恢复大纲流式状态', 'info')
+      } else if (snapshotPhase === 'CONTENT_GENERATING') {
+        currentPhase.value = 'CONTENT_GENERATING'
+        article.value.content = snapshotContent
+        isStreaming.value = true
+        currentStep.value = 2
+        addLog('已恢复正文流式状态', 'info')
+      }
+      scrollToBottom()
+      break
+    }
+
     case 'ERROR':
       errorMessage.value = msg.message || '创作失败'
       errorVisible.value = true
@@ -1041,6 +1066,84 @@ const handleSSEComplete = () => {
   console.log('SSE连接关闭')
 }
 
+// 页面刷新后重连恢复
+const reconnect = async (existingTaskId: string, existingTopic: string) => {
+  taskId.value = existingTaskId
+  topic.value = existingTopic
+  isCreating.value = true
+  addLog('正在恢复连接...', 'info')
+
+  try {
+    // 1. 先获取当前文章状态
+    const res = await getArticle({ taskId: existingTaskId })
+    const data = res.data.data
+    if (!data) {
+      throw new Error('无法获取文章状态')
+    }
+
+    // 2. 恢复已完成的数据
+    article.value.mainTitle = data.mainTitle || ''
+    article.value.subTitle = data.subTitle || ''
+    article.value.content = data.content || ''
+    article.value.fullContent = data.fullContent || ''
+    article.value.images = data.images || []
+    article.value.coverImage = data.coverImage || ''
+    titleOptions.value = data.titleOptions || []
+    outline.value = data.outline || []
+
+    // 3. 根据 phase 恢复 UI
+    const phase = data.phase || 'PENDING'
+    switch (phase) {
+      case 'PENDING':
+      case 'TITLE_GENERATING':
+        currentPhase.value = 'TITLE_GENERATING'
+        break
+      case 'TITLE_SELECTING':
+        currentPhase.value = 'TITLE_SELECTING'
+        currentStep.value = 0
+        isCreating.value = false
+        break
+      case 'OUTLINE_GENERATING':
+        currentPhase.value = 'OUTLINE_GENERATING'
+        currentStep.value = 1
+        // 大纲内容从 SSE 回放中恢复
+        break
+      case 'OUTLINE_EDITING':
+        currentPhase.value = 'OUTLINE_EDITING'
+        currentStep.value = 1
+        isCreating.value = false
+        break
+      case 'CONTENT_GENERATING':
+        currentPhase.value = 'CONTENT_GENERATING'
+        currentStep.value = 2
+        // 正文内容从 SSE 回放中恢复
+        break
+      case 'COMPLETED':
+        currentPhase.value = 'COMPLETED'
+        currentStep.value = 6
+        isCompleted.value = true
+        isCreating.value = false
+        break
+    }
+
+    addLog(`当前阶段: ${phase}`, 'info')
+
+    // 4. 建立 SSE 连接（后端自动回放缓冲消息 + 快照 + 直播）
+    addLog('已建立实时连接，接收回放消息...', 'info')
+    eventSource = connectSSE(existingTaskId, {
+      onMessage: handleSSEMessage,
+      onError: handleSSEError,
+      onComplete: handleSSEComplete,
+    })
+  } catch (error) {
+    const err = error as Error
+    message.error(err.message || '恢复连接失败')
+    isCreating.value = false
+    currentPhase.value = 'INPUT'
+    router.replace({ query: {} })
+  }
+}
+
 // 复制全文
 const copyContent = async () => {
   const content = article.value.fullContent || article.value.content || ''
@@ -1059,6 +1162,7 @@ const viewArticle = () => {
 
 // 重新创作
 const resetCreate = () => {
+  router.replace({ query: {} })
   currentPhase.value = 'INPUT'
   topic.value = ''
   selectedStyle.value = ''
@@ -1083,10 +1187,15 @@ const resetCreate = () => {
   }
 }
 
-// 组件挂载时检查路由参数
+// 组件挂载时检查路由参数，支持刷新后重连
 onMounted(() => {
-  if (route.query.topic) {
-    topic.value = route.query.topic as string
+  const existingTaskId = route.query.taskId as string
+  const existingTopic = route.query.topic as string
+
+  if (existingTaskId) {
+    reconnect(existingTaskId, existingTopic || '')
+  } else if (existingTopic) {
+    topic.value = existingTopic
   }
 })
 

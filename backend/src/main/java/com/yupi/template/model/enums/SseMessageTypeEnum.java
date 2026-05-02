@@ -71,6 +71,11 @@ public enum SseMessageTypeEnum {
     ALL_COMPLETE("ALL_COMPLETE", "全部完成"),
 
     /**
+     * 流式内容快照（断线重连后发送已累积的流式内容）
+     */
+    STREAMING_SNAPSHOT("STREAMING_SNAPSHOT", "流式内容快照"),
+
+    /**
      * 阶段回退（用户回退到上一个决策节点）
      */
     PHASE_ROLLED_BACK("PHASE_ROLLED_BACK", "阶段已回退"),
