@@ -1,5 +1,6 @@
 package com.yupi.template.manager;
 
+import com.yupi.template.utils.GsonUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -9,187 +10,214 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static com.yupi.template.constant.ArticleConstant.SSE_RECONNECT_TIME_MS;
 import static com.yupi.template.constant.ArticleConstant.SSE_TIMEOUT_MS;
 
 /**
- * SSE Emitter 管理器
- * 支持消息缓冲（断线重连后回放遗漏的消息）和流式内容累积
- *
- * @author <a href="https://codefather.cn">编程导航学习圈</a>
+ * SSE emitter manager with sequence-based replay and streaming snapshots.
  */
 @Component
 @Slf4j
 public class SseEmitterManager {
 
-    /**
-     * 每个 taskId 对应一个活跃的 SseEmitter
-     */
     private final Map<String, SseEmitter> emitterMap = new ConcurrentHashMap<>();
 
-    /**
-     * 消息缓冲区：暂存已发送的消息，供重连客户端回放
-     */
-    private final Map<String, List<String>> messageBufferMap = new ConcurrentHashMap<>();
+    private final Map<String, List<BufferedMessage>> messageBufferMap = new ConcurrentHashMap<>();
 
-    /**
-     * 流式内容累积器：按 taskId 存储当前正在流式输出的累积文本
-     */
     private final Map<String, StringBuilder> streamingAccumulatorMap = new ConcurrentHashMap<>();
+
+    private final Map<String, AtomicLong> seqMap = new ConcurrentHashMap<>();
+
+    private final Map<String, Object> taskLockMap = new ConcurrentHashMap<>();
 
     private static final int MAX_BUFFER_SIZE = 300;
 
-    /**
-     * 创建 SseEmitter 并回放缓冲消息
-     * 如果已有旧连接，先将其关闭并清理
-     */
-    public SseEmitter createEmitter(String taskId) {
-        // 关闭旧连接（页面刷新场景），避免旧回调误删新 emitter
+    public record BufferedMessage(long seq, String content) {
+    }
+
+    public void runWithTaskLock(String taskId, Runnable runnable) {
+        synchronized (getTaskLock(taskId)) {
+            runnable.run();
+        }
+    }
+
+    public SseEmitter createEmitter(String taskId, long lastSeq) {
         SseEmitter oldEmitter = emitterMap.remove(taskId);
         if (oldEmitter != null) {
             try {
                 oldEmitter.complete();
             } catch (Exception e) {
-                log.debug("关闭旧 SSE 连接异常, taskId={}", taskId, e);
+                log.debug("Close old SSE connection failed, taskId={}", taskId, e);
             }
         }
 
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
 
         emitter.onTimeout(() -> {
-            log.warn("SSE 连接超时, taskId={}", taskId);
+            log.warn("SSE connection timeout, taskId={}", taskId);
             emitterMap.remove(taskId, emitter);
         });
         emitter.onCompletion(() -> {
-            log.info("SSE 连接完成, taskId={}", taskId);
+            log.info("SSE connection completed, taskId={}", taskId);
             emitterMap.remove(taskId, emitter);
         });
         emitter.onError((e) -> {
-            log.error("SSE 连接错误, taskId={}", taskId, e);
+            log.error("SSE connection error, taskId={}", taskId, e);
             emitterMap.remove(taskId, emitter);
         });
 
-        emitterMap.put(taskId, emitter);
-        log.info("SSE 连接已创建, taskId={}", taskId);
-
-        // 回放缓冲消息
-        replayBufferedMessages(taskId, emitter);
-
+        replayBufferedMessages(taskId, emitter, lastSeq);
+        log.info("SSE emitter created, taskId={}, lastSeq={}", taskId, lastSeq);
         return emitter;
     }
 
-    /**
-     * 发送消息。缓冲规则：
-     * - 流式碎片（AGENT*_STREAMING）不缓冲，由 STREAMING_SNAPSHOT 统一恢复
-     * - 已持久化的状态事件（TITLES_GENERATED、OUTLINE_GENERATED）不缓冲，由 sendStateSnapshot 从 DB 读取发送
-     * - 其余消息（完成信号、错误等）正常缓冲回放
-     */
-    public void send(String taskId, String message) {
-        if (shouldBuffer(message)) {
-            bufferMessage(taskId, message);
-        }
+    public void activateEmitter(String taskId, SseEmitter emitter) {
+        emitterMap.put(taskId, emitter);
+        log.info("SSE emitter activated, taskId={}", taskId);
+    }
 
-        SseEmitter emitter = emitterMap.get(taskId);
+    public void send(String taskId, String message) {
+        synchronized (getTaskLock(taskId)) {
+            long seq = getNextSeq(taskId);
+            String enrichedMessage = injectSeq(message, seq);
+            bufferMessage(taskId, new BufferedMessage(seq, enrichedMessage));
+
+            SseEmitter emitter = emitterMap.get(taskId);
+            if (emitter == null) {
+                log.debug("No active SSE connection, message buffered, taskId={}", taskId);
+                return;
+            }
+
+            try {
+                emitter.send(SseEmitter.event()
+                        .id(String.valueOf(seq))
+                        .data(enrichedMessage)
+                        .reconnectTime(SSE_RECONNECT_TIME_MS));
+            } catch (IOException e) {
+                log.error("SSE send failed, taskId={}", taskId, e);
+                emitterMap.remove(taskId, emitter);
+            }
+        }
+    }
+
+    public void accumulateStreaming(String taskId, String content) {
+        synchronized (getTaskLock(taskId)) {
+            streamingAccumulatorMap
+                    .computeIfAbsent(taskId, k -> new StringBuilder())
+                    .append(content);
+        }
+    }
+
+    public String getAccumulatedStreaming(String taskId) {
+        synchronized (getTaskLock(taskId)) {
+            StringBuilder sb = streamingAccumulatorMap.get(taskId);
+            return sb != null ? sb.toString() : null;
+        }
+    }
+
+    public void clearStreamingAccumulator(String taskId) {
+        synchronized (getTaskLock(taskId)) {
+            streamingAccumulatorMap.remove(taskId);
+        }
+    }
+
+    public void sendDirect(String taskId, Map<String, Object> data) {
+        sendDirect(taskId, data, emitterMap.get(taskId));
+    }
+
+    public void sendDirect(String taskId, Map<String, Object> data, SseEmitter emitter) {
         if (emitter == null) {
-            log.debug("SSE 无活跃连接, taskId={}, 消息已缓冲", taskId);
+            log.debug("SSE direct emitter is null, taskId={}", taskId);
             return;
         }
 
+        long seq = getNextSeq(taskId);
+        data.put("seq", seq);
+
         try {
             emitter.send(SseEmitter.event()
-                    .data(message)
+                    .id(String.valueOf(seq))
+                    .data(GsonUtils.toJson(data))
                     .reconnectTime(SSE_RECONNECT_TIME_MS));
         } catch (IOException e) {
-            log.error("SSE 消息发送失败, taskId={}", taskId, e);
+            log.error("SSE direct send failed, taskId={}", taskId, e);
             emitterMap.remove(taskId, emitter);
         }
     }
 
-    /**
-     * 是否需要缓冲。流式碎片和已有 DB 快照覆盖的事件不缓冲，避免重连时重复发送。
-     */
-    private boolean shouldBuffer(String message) {
-        if (message.contains("\"AGENT2_STREAMING\"") || message.contains("\"AGENT3_STREAMING\"")) {
-            return false; // 流式碎片 → STREAMING_SNAPSHOT 覆盖
-        }
-        if (message.contains("\"TITLES_GENERATED\"") || message.contains("\"OUTLINE_GENERATED\"")) {
-            return false; // 已持久化事件 → sendStateSnapshot 覆盖
-        }
-        return true;
-    }
-
-    /**
-     * 累积流式内容（用于断线重连后发送快照）
-     */
-    public void accumulateStreaming(String taskId, String content) {
-        streamingAccumulatorMap
-                .computeIfAbsent(taskId, k -> new StringBuilder())
-                .append(content);
-    }
-
-    /**
-     * 获取当前累积的流式内容
-     */
-    public String getAccumulatedStreaming(String taskId) {
-        StringBuilder sb = streamingAccumulatorMap.get(taskId);
-        return sb != null ? sb.toString() : null;
-    }
-
-    /**
-     * 清除流式内容累积器（流式阶段完成后调用）
-     */
-    public void clearStreamingAccumulator(String taskId) {
-        streamingAccumulatorMap.remove(taskId);
-    }
-
-    /**
-     * 完成连接并清理所有资源
-     */
     public void complete(String taskId) {
-        SseEmitter emitter = emitterMap.remove(taskId);
-        if (emitter != null) {
-            try {
-                emitter.complete();
-            } catch (Exception e) {
-                log.warn("SSE 连接完成失败, taskId={}", taskId, e);
+        synchronized (getTaskLock(taskId)) {
+            SseEmitter emitter = emitterMap.remove(taskId);
+            if (emitter != null) {
+                try {
+                    emitter.complete();
+                } catch (Exception e) {
+                    log.warn("SSE complete failed, taskId={}", taskId, e);
+                }
             }
+            streamingAccumulatorMap.remove(taskId);
         }
-        messageBufferMap.remove(taskId);
-        streamingAccumulatorMap.remove(taskId);
-        log.info("SSE 连接已全部完成, taskId={}", taskId);
+        log.info("SSE connection closed, replay buffer retained, taskId={}", taskId);
     }
 
-    /**
-     * 检查是否存在活跃连接
-     */
     public boolean exists(String taskId) {
         return emitterMap.containsKey(taskId);
     }
 
-    private void bufferMessage(String taskId, String message) {
-        List<String> buffer = messageBufferMap.computeIfAbsent(taskId, k -> new ArrayList<>());
+    private long getNextSeq(String taskId) {
+        return seqMap.computeIfAbsent(taskId, k -> new AtomicLong(0)).incrementAndGet();
+    }
+
+    private Object getTaskLock(String taskId) {
+        return taskLockMap.computeIfAbsent(taskId, k -> new Object());
+    }
+
+    @SuppressWarnings("unchecked")
+    private String injectSeq(String jsonMessage, long seq) {
+        Map<String, Object> map = GsonUtils.fromJson(jsonMessage, Map.class);
+        map.put("seq", seq);
+        return GsonUtils.toJson(map);
+    }
+
+    private void bufferMessage(String taskId, BufferedMessage message) {
+        List<BufferedMessage> buffer = messageBufferMap.computeIfAbsent(taskId, k -> new ArrayList<>());
         if (buffer.size() >= MAX_BUFFER_SIZE) {
             buffer.remove(0);
         }
         buffer.add(message);
     }
 
-    private void replayBufferedMessages(String taskId, SseEmitter emitter) {
-        List<String> buffer = messageBufferMap.get(taskId);
+    private void replayBufferedMessages(String taskId, SseEmitter emitter, long lastSeq) {
+        List<BufferedMessage> buffer = messageBufferMap.get(taskId);
         if (buffer == null || buffer.isEmpty()) {
             return;
         }
-        log.info("SSE 回放缓冲消息, taskId={}, 消息数={}", taskId, buffer.size());
-        for (String message : buffer) {
+
+        long replayed = 0;
+        long skipped = 0;
+        for (BufferedMessage msg : buffer) {
+            if (msg.seq() <= lastSeq) {
+                skipped++;
+                continue;
+            }
+            if (msg.content().contains("\"ALL_COMPLETE\"")) {
+                skipped++;
+                continue;
+            }
             try {
                 emitter.send(SseEmitter.event()
-                        .data(message)
+                        .id(String.valueOf(msg.seq()))
+                        .data(msg.content())
                         .reconnectTime(SSE_RECONNECT_TIME_MS));
+                replayed++;
             } catch (IOException e) {
-                log.warn("SSE 回放消息发送失败, taskId={}", taskId, e);
+                log.warn("SSE replay failed, taskId={}, seq={}", taskId, msg.seq(), e);
                 return;
             }
         }
+        log.info("SSE replay complete, taskId={}, replayed={}, skipped={}, lastSeq={}",
+                taskId, replayed, skipped, lastSeq);
     }
 }

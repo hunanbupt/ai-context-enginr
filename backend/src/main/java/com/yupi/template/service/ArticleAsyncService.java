@@ -124,6 +124,9 @@ public class ArticleAsyncService {
             if (article == null) {
                 throw new RuntimeException("文章不存在");
             }
+
+            // 更新阶段为大纲生成中（用于断线重连时 sendStateSnapshot 获取正确阶段）
+            articleService.updatePhase(taskId, ArticlePhaseEnum.OUTLINE_GENERATING);
             
             // 创建状态对象
             ArticleState state = new ArticleState();
@@ -195,6 +198,9 @@ public class ArticleAsyncService {
             if (article == null) {
                 throw new RuntimeException("文章不存在");
             }
+
+            // 更新阶段为正文生成中（用于断线重连时 sendStateSnapshot 获取正确阶段）
+            articleService.updatePhase(taskId, ArticlePhaseEnum.CONTENT_GENERATING);
             
             // 创建状态对象
             ArticleState state = new ArticleState();
@@ -238,11 +244,11 @@ public class ArticleAsyncService {
                 });
             }
             
-            // 清除正文流式累积器（完整正文即将保存到 DB）
-            sseEmitterManager.clearStreamingAccumulator(taskId);
-
             // 保存完整文章到数据库
             articleService.saveArticleContent(taskId, state);
+
+            // 清除正文流式累积器（完整正文已保存到 DB）
+            sseEmitterManager.clearStreamingAccumulator(taskId);
 
             // 更新状态为已完成
             articleService.updateArticleStatus(taskId, ArticleStatusEnum.COMPLETED, null);

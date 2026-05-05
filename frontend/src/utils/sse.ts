@@ -6,6 +6,7 @@ import { API_BASE_URL } from '@/config/env'
 export interface SSEMessage {
   type: string
   data?: any
+  seq?: number
   [key: string]: any
 }
 
@@ -17,11 +18,23 @@ export interface SSEOptions {
 
 /**
  * Create SSE connection
+ * @param taskId  - The task identifier
+ * @param options - Callbacks and configuration
+ * @param lastSeq - The last sequence number the client received (default 0)
  */
-export const connectSSE = (taskId: string, options: SSEOptions): EventSource => {
+export const connectSSE = (
+  taskId: string,
+  options: SSEOptions,
+  lastSeq: number = 0
+): EventSource => {
   const { onMessage, onError, onComplete } = options
 
-  const eventSource = new EventSource(`${API_BASE_URL}/article/progress/${taskId}`, {
+  let url = `${API_BASE_URL}/article/progress/${taskId}`
+  if (lastSeq > 0) {
+    url += `?lastSeq=${lastSeq}`
+  }
+
+  const eventSource = new EventSource(url, {
     withCredentials: true,
   })
 

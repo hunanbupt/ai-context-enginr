@@ -102,22 +102,57 @@ public class ArticleController {
      */
     @GetMapping("/progress/{taskId}")
     @Operation(summary = "获取文章生成进度(SSE)")
-    public SseEmitter getProgress(@PathVariable String taskId, HttpServletRequest httpServletRequest) {
+    public SseEmitter getProgress(
+            @PathVariable String taskId,
+            @RequestParam(required = false, defaultValue = "0") long lastSeq,
+            HttpServletRequest httpServletRequest) {
         ThrowUtils.throwIf(taskId == null || taskId.trim().isEmpty(),
                 ErrorCode.PARAMS_ERROR, "任务ID不能为空");
+
+        // 读取 Last-Event-ID 头（浏览器 EventSource 自动重连时发送）
+        String lastEventIdHeader = httpServletRequest.getHeader("Last-Event-ID");
+        long lastEventId = 0;
+        if (lastEventIdHeader != null && !lastEventIdHeader.isEmpty()) {
+            try {
+                lastEventId = Long.parseLong(lastEventIdHeader);
+            } catch (NumberFormatException e) {
+                log.warn("无效的 Last-Event-ID 头: {}", lastEventIdHeader);
+            }
+        }
+
+        // 取两者最大值，确保不丢消息
+        long effectiveLastSeq = Math.max(lastSeq, lastEventId);
 
         // 校验权限（内部会检查任务是否存在以及用户是否有权限访问）
         User loginUser = userService.getLoginUser(httpServletRequest);
         ArticleVO articleVO = articleService.getArticleDetail(taskId, loginUser);
 
-        // 创建 SSE Emitter（内部会回放缓冲消息）
-        SseEmitter emitter = sseEmitterManager.createEmitter(taskId);
+        // 1. 创建 SSE Emitter 并回放缓冲消息（此时 emitter 未激活，实时消息不会插队）
+        SseEmitter[] emitterHolder = new SseEmitter[1];
+        sseEmitterManager.runWithTaskLock(taskId, () -> {
+            SseEmitter emitter = sseEmitterManager.createEmitter(taskId, effectiveLastSeq);
 
-        // 发送状态快照，帮助前端恢复到当前阶段
-        sendStateSnapshot(taskId, articleVO, emitter);
+        // 2. 发送状态快照（直接使用 emitter，排在回放消息之后、实时消息之前）
+            sendStateSnapshot(taskId, articleVO, emitter);
 
-        log.info("SSE 连接已建立, taskId={}, phase={}", taskId, articleVO.getPhase());
+        // 3. 激活 emitter，此后实时消息（AGENT*_STREAMING 等）才能推送
+            sseEmitterManager.activateEmitter(taskId, emitter);
+            emitterHolder[0] = emitter;
+        });
+        SseEmitter emitter = emitterHolder[0];
+
+        log.info("SSE 连接已建立, taskId={}, phase={}, lastSeq={}, lastEventId={}, effectiveLastSeq={}",
+                taskId, articleVO.getPhase(), lastSeq, lastEventId, effectiveLastSeq);
         return emitter;
+    }
+
+    /**
+     * 测试接口，关闭 SSE 连接
+     */
+
+    @PostMapping("test/close")
+    public void close(@RequestParam String taskId) {
+        sseEmitterManager.complete(taskId);
     }
 
     /**
@@ -125,36 +160,46 @@ public class ArticleController {
      * 包含：已完成的数据（标题方案、大纲）+ 流式累积内容
      */
     private void sendStateSnapshot(String taskId, ArticleVO articleVO, SseEmitter emitter) {
-        try {
-            String phase = articleVO.getPhase();
+        String phase = articleVO.getPhase();
+
+        // 如果标题方案已生成，发送快照
+        if (articleVO.getTitleOptions() != null && !articleVO.getTitleOptions().isEmpty()) {
             Map<String, Object> data = new HashMap<>();
+            data.put("type", SseMessageTypeEnum.TITLES_GENERATED.getValue());
+            data.put("titleOptions", articleVO.getTitleOptions());
+            sseEmitterManager.sendDirect(taskId, data, emitter);
+        }
 
-            // 如果标题方案已生成，发送快照
-            if (articleVO.getTitleOptions() != null && !articleVO.getTitleOptions().isEmpty()) {
-                data.put("type", SseMessageTypeEnum.TITLES_GENERATED.getValue());
-                data.put("titleOptions", articleVO.getTitleOptions());
-                emitter.send(SseEmitter.event().data(GsonUtils.toJson(data)));
-            }
+        // 如果大纲已生成，发送快照
+        if (articleVO.getOutline() != null && !articleVO.getOutline().isEmpty()) {
+            Map<String, Object> data = new HashMap<>();
+            data.put("type", SseMessageTypeEnum.OUTLINE_GENERATED.getValue());
+            data.put("outline", articleVO.getOutline());
+            sseEmitterManager.sendDirect(taskId, data, emitter);
+        }
 
-            // 如果大纲已生成，发送快照
-            if (articleVO.getOutline() != null && !articleVO.getOutline().isEmpty()) {
-                data.clear();
-                data.put("type", SseMessageTypeEnum.OUTLINE_GENERATED.getValue());
-                data.put("outline", articleVO.getOutline());
-                emitter.send(SseEmitter.event().data(GsonUtils.toJson(data)));
-            }
+        // 如果正在流式生成中，发送已累积的流式内容快照
+        String accumulated = sseEmitterManager.getAccumulatedStreaming(taskId);
+        if (accumulated != null && !accumulated.isEmpty()) {
+            Map<String, Object> data = new HashMap<>();
+            data.put("type", SseMessageTypeEnum.STREAMING_SNAPSHOT.getValue());
+            data.put("content", accumulated);
+            data.put("phase", phase);
+            sseEmitterManager.sendDirect(taskId, data, emitter);
+        }
 
-            // 如果正在流式生成中，发送已累积的流式内容快照
-            String accumulated = sseEmitterManager.getAccumulatedStreaming(taskId);
-            if (accumulated != null && !accumulated.isEmpty()) {
-                data.clear();
-                data.put("type", SseMessageTypeEnum.STREAMING_SNAPSHOT.getValue());
-                data.put("content", accumulated);
-                data.put("phase", phase);
-                emitter.send(SseEmitter.event().data(GsonUtils.toJson(data)));
-            }
-        } catch (IOException e) {
-            log.warn("SSE 状态快照发送失败, taskId={}", taskId, e);
+        if (articleVO.getFullContent() != null && !articleVO.getFullContent().isEmpty()) {
+            Map<String, Object> data = new HashMap<>();
+            data.put("type", SseMessageTypeEnum.MERGE_COMPLETE.getValue());
+            data.put("fullContent", articleVO.getFullContent());
+            sseEmitterManager.sendDirect(taskId, data, emitter);
+        }
+
+        if ("COMPLETED".equals(articleVO.getStatus())) {
+            Map<String, Object> data = new HashMap<>();
+            data.put("type", SseMessageTypeEnum.ALL_COMPLETE.getValue());
+            data.put("taskId", taskId);
+            sseEmitterManager.sendDirect(taskId, data, emitter);
         }
     }
 

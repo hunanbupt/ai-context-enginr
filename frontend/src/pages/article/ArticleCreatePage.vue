@@ -654,6 +654,7 @@ const errorVisible = ref(false)
 const errorMessage = ref('')
 const confirmLoading = ref(false)
 const goBackLoading = ref(false)
+const lastSeq = ref<number>(0)
 
 // 实时日志
 interface RealtimeLog {
@@ -668,6 +669,23 @@ const titleOptions = ref<Array<{mainTitle: string, subTitle: string}>>([])
 
 // 大纲数据
 const outline = ref<Array<{section: number, title: string, points: string[]}>>([])
+
+const normalizeTitleOptions = (items: Array<{mainTitle?: string, subTitle?: string}> = []) => {
+  return items
+    .filter((item) => item.mainTitle && item.subTitle)
+    .map((item) => ({
+      mainTitle: item.mainTitle || '',
+      subTitle: item.subTitle || '',
+    }))
+}
+
+const normalizeOutline = (items: Array<{section?: number, title?: string, points?: string[]}> = []) => {
+  return items.map((item, index) => ({
+    section: item.section ?? index + 1,
+    title: item.title || '',
+    points: item.points || [],
+  }))
+}
 
 // 大纲数据（流式）
 const outlineRaw = ref('')
@@ -740,6 +758,54 @@ const article = ref<Partial<API.ArticleVO>>({
 
 let eventSource: EventSource | null = null
 
+interface StreamDraft {
+  taskId: string
+  topic: string
+  phase: string
+  currentStep: number
+  lastSeq: number
+  outlineRaw: string
+  content: string
+  fullContent: string
+  mainTitle: string
+  subTitle: string
+}
+
+const getStreamDraftKey = (id: string) => `article-stream-draft:${id}`
+
+const saveStreamDraft = () => {
+  if (!taskId.value) return
+  if (currentPhase.value === 'COMPLETED') return
+  const draft: StreamDraft = {
+    taskId: taskId.value,
+    topic: topic.value,
+    phase: currentPhase.value,
+    currentStep: currentStep.value,
+    lastSeq: lastSeq.value,
+    outlineRaw: outlineRaw.value,
+    content: article.value.content || '',
+    fullContent: article.value.fullContent || '',
+    mainTitle: article.value.mainTitle || '',
+    subTitle: article.value.subTitle || '',
+  }
+  sessionStorage.setItem(getStreamDraftKey(taskId.value), JSON.stringify(draft))
+}
+
+const loadStreamDraft = (id: string): StreamDraft | null => {
+  const raw = sessionStorage.getItem(getStreamDraftKey(id))
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as StreamDraft
+  } catch {
+    sessionStorage.removeItem(getStreamDraftKey(id))
+    return null
+  }
+}
+
+const clearStreamDraft = (id: string) => {
+  sessionStorage.removeItem(getStreamDraftKey(id))
+}
+
 // Markdown 转 HTML
 const markdownToHtml = (markdown: string | undefined) => {
   return marked(markdown || '')
@@ -768,6 +834,7 @@ const startCreate = async () => {
 
   isCreating.value = true
   currentStep.value = 0
+  lastSeq.value = 0
   realtimeLogs.value = []
   addLog('开始创建文章任务...', 'info')
 
@@ -828,7 +895,13 @@ const formatLogTime = (timestamp: number) => {
 
 // 处理 SSE 消息
 const handleSSEMessage = (msg: SSEMessage) => {
+  if (typeof msg.seq === 'number' && msg.seq > lastSeq.value) {
+    lastSeq.value = msg.seq
+  }
+
   console.log('SSE消息:', msg)
+
+  queueMicrotask(saveStreamDraft)
 
   switch (msg.type) {
     case 'AGENT1_COMPLETE':
@@ -918,6 +991,7 @@ const handleSSEMessage = (msg: SSEMessage) => {
       currentPhase.value = 'COMPLETED'
       currentStep.value = 6
       isCompleted.value = true
+      clearStreamDraft(taskId.value)
       message.success('文章创作完成!')
       addLog('✨ 文章创作完成！', 'success')
       break
@@ -946,8 +1020,8 @@ const handleSSEMessage = (msg: SSEMessage) => {
       getArticle({ taskId: msg.taskId || taskId.value }).then((res) => {
         const data = res.data.data
         if (data) {
-          titleOptions.value = data.titleOptions || []
-          outline.value = data.outline || []
+          titleOptions.value = normalizeTitleOptions(data.titleOptions || [])
+          outline.value = normalizeOutline(data.outline || [])
           article.value.mainTitle = data.mainTitle || ''
           article.value.subTitle = data.subTitle || ''
           article.value.content = data.content || ''
@@ -969,15 +1043,20 @@ const handleSSEMessage = (msg: SSEMessage) => {
 
       if (snapshotPhase === 'OUTLINE_GENERATING') {
         currentPhase.value = 'OUTLINE_GENERATING'
-        outlineRaw.value = snapshotContent
+        if (snapshotContent.length >= outlineRaw.value.length) {
+          outlineRaw.value = snapshotContent
+        }
         isOutlineStreaming.value = true
         isCreating.value = true
         currentStep.value = 1
         addLog('已恢复大纲流式状态', 'info')
       } else if (snapshotPhase === 'CONTENT_GENERATING') {
         currentPhase.value = 'CONTENT_GENERATING'
-        article.value.content = snapshotContent
+        if (snapshotContent.length >= (article.value.content || '').length) {
+          article.value.content = snapshotContent
+        }
         isStreaming.value = true
+        isCreating.value = true
         currentStep.value = 2
         addLog('已恢复正文流式状态', 'info')
       }
@@ -1057,6 +1136,13 @@ const handleGoBack = async (targetPhase: string) => {
 // 处理 SSE 错误
 const handleSSEError = (error: Event) => {
   console.error('SSE错误:', error)
+  const target = error.target as EventSource | null
+  // 连接中断后浏览器会自动重连（readyState=0），此时不报错
+  if (target && target.readyState === EventSource.CONNECTING) {
+    console.log('SSE 正在自动重连...')
+    return
+  }
+  // 连接彻底关闭（readyState=2）才提示错误
   message.error('连接失败,请重试')
   isCreating.value = false
 }
@@ -1070,6 +1156,20 @@ const handleSSEComplete = () => {
 const reconnect = async (existingTaskId: string, existingTopic: string) => {
   taskId.value = existingTaskId
   topic.value = existingTopic
+  const draft = loadStreamDraft(existingTaskId)
+  if (draft) {
+    topic.value = existingTopic || draft.topic
+    currentPhase.value = draft.phase
+    currentStep.value = draft.currentStep
+    lastSeq.value = draft.lastSeq
+    outlineRaw.value = draft.outlineRaw
+    article.value.mainTitle = draft.mainTitle
+    article.value.subTitle = draft.subTitle
+    article.value.content = draft.content
+    article.value.fullContent = draft.fullContent
+    isOutlineStreaming.value = draft.phase === 'OUTLINE_GENERATING'
+    isStreaming.value = draft.phase === 'CONTENT_GENERATING'
+  }
   isCreating.value = true
   addLog('正在恢复连接...', 'info')
 
@@ -1082,17 +1182,17 @@ const reconnect = async (existingTaskId: string, existingTopic: string) => {
     }
 
     // 2. 恢复已完成的数据
-    article.value.mainTitle = data.mainTitle || ''
-    article.value.subTitle = data.subTitle || ''
-    article.value.content = data.content || ''
-    article.value.fullContent = data.fullContent || ''
+    article.value.mainTitle = data.mainTitle || article.value.mainTitle || ''
+    article.value.subTitle = data.subTitle || article.value.subTitle || ''
+    article.value.content = data.content || article.value.content || ''
+    article.value.fullContent = data.fullContent || article.value.fullContent || ''
     article.value.images = data.images || []
     article.value.coverImage = data.coverImage || ''
-    titleOptions.value = data.titleOptions || []
-    outline.value = data.outline || []
+    titleOptions.value = normalizeTitleOptions(data.titleOptions || [])
+    outline.value = normalizeOutline(data.outline || [])
 
     // 3. 根据 phase 恢复 UI
-    const phase = data.phase || 'PENDING'
+    const phase = data.status === 'COMPLETED' ? 'COMPLETED' : (data.phase || 'PENDING')
     switch (phase) {
       case 'PENDING':
       case 'TITLE_GENERATING':
@@ -1128,13 +1228,18 @@ const reconnect = async (existingTaskId: string, existingTopic: string) => {
 
     addLog(`当前阶段: ${phase}`, 'info')
 
-    // 4. 建立 SSE 连接（后端自动回放缓冲消息 + 快照 + 直播）
+    // 4. 建立 SSE 连接（后端只回放 seq > lastSeq 的消息）
     addLog('已建立实时连接，接收回放消息...', 'info')
+    if (phase === 'COMPLETED') {
+      clearStreamDraft(existingTaskId)
+      return
+    }
+
     eventSource = connectSSE(existingTaskId, {
       onMessage: handleSSEMessage,
       onError: handleSSEError,
       onComplete: handleSSEComplete,
-    })
+    }, lastSeq.value)
   } catch (error) {
     const err = error as Error
     message.error(err.message || '恢复连接失败')
@@ -1162,6 +1267,9 @@ const viewArticle = () => {
 
 // 重新创作
 const resetCreate = () => {
+  if (taskId.value) {
+    clearStreamDraft(taskId.value)
+  }
   router.replace({ query: {} })
   currentPhase.value = 'INPUT'
   topic.value = ''
