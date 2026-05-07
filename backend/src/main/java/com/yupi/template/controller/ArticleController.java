@@ -80,9 +80,11 @@ public class ArticleController {
 
         // 检查并消耗配额 + 创建文章任务（在同一事务中）
         String taskId = articleService.createArticleTaskWithQuotaCheck(
-                request.getTopic(), 
-                request.getStyle(), 
+                request.getTopic(),
+                request.getStyle(),
                 request.getEnabledImageMethods(),
+                request.getRagEnabled(),
+                request.getKbId(),
                 loginUser
         );
 

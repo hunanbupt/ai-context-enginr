@@ -37,6 +37,7 @@ public class OutlineGeneratorAgent implements NodeAction {
     public static final String INPUT_SUB_TITLE = "subTitle";
     public static final String INPUT_USER_DESCRIPTION = "userDescription";
     public static final String INPUT_STYLE = "style";
+    public static final String INPUT_RAG_CONTEXT = "ragContext";
     public static final String OUTPUT_OUTLINE = "outline";
 
     @Override
@@ -44,33 +45,41 @@ public class OutlineGeneratorAgent implements NodeAction {
         String mainTitle = state.value(INPUT_MAIN_TITLE)
                 .map(Object::toString)
                 .orElseThrow(() -> new IllegalArgumentException("缺少主标题参数"));
-        
+
         String subTitle = state.value(INPUT_SUB_TITLE)
                 .map(Object::toString)
                 .orElse("");
-        
+
         String userDescription = state.value(INPUT_USER_DESCRIPTION)
                 .map(Object::toString)
                 .orElse(null);
-        
+
         String style = state.value(INPUT_STYLE)
                 .map(Object::toString)
                 .orElse(null);
-        
+
+        String ragContext = state.value(INPUT_RAG_CONTEXT)
+                .map(Object::toString)
+                .orElse("");
+
         log.info("OutlineGeneratorAgent 开始执行: mainTitle={}, subTitle={}", mainTitle, subTitle);
-        
+
         // 构建用户描述部分
         String descriptionSection = "";
         if (userDescription != null && !userDescription.trim().isEmpty()) {
             descriptionSection = PromptConstant.AGENT2_DESCRIPTION_SECTION
                     .replace("{userDescription}", userDescription);
         }
-        
+
+        // 构建 RAG 上下文片段
+        String ragContextSection = buildRagContextSection(ragContext);
+
         // 构建 prompt
         String prompt = PromptConstant.AGENT2_OUTLINE_PROMPT
                 .replace("{mainTitle}", mainTitle)
                 .replace("{subTitle}", subTitle)
                 .replace("{descriptionSection}", descriptionSection)
+                .replace("{ragContext}", ragContextSection)
                 + getStylePrompt(style);
         
         // 获取流式处理器
@@ -114,6 +123,16 @@ public class OutlineGeneratorAgent implements NodeAction {
                 .blockLast();
         
         return contentBuilder.toString();
+    }
+
+    /**
+     * 构建 RAG 上下文 Prompt 片段
+     */
+    private String buildRagContextSection(String ragContext) {
+        if (ragContext == null || ragContext.isEmpty()) {
+            return "";
+        }
+        return PromptConstant.RAG_CONTEXT_SECTION.replace("{ragContext}", ragContext);
     }
 
     /**

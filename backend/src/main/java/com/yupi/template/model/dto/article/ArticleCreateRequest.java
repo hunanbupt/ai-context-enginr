@@ -29,5 +29,15 @@ public class ArticleCreateRequest implements Serializable {
      */
     private List<String> enabledImageMethods;
 
+    /**
+     * 是否启用 RAG（课程知识库增强），可为空
+     */
+    private Boolean ragEnabled;
+
+    /**
+     * 关联的课程知识库 ID，ragEnabled=true 时必填
+     */
+    private String kbId;
+
     private static final long serialVersionUID = 1L;
 }

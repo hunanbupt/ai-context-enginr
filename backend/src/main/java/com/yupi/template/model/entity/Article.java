@@ -105,6 +105,16 @@ public class Article implements Serializable {
     private String images;
 
     /**
+     * 关联的课程知识库 ID，为空表示不使用知识库
+     */
+    private String kbId;
+
+    /**
+     * 是否启用 RAG：0 不启用 / 1 启用
+     */
+    private Integer ragEnabled;
+
+    /**
      * 状态：PENDING/PROCESSING/COMPLETED/FAILED
      */
     private String status;

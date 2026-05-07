@@ -123,8 +123,10 @@ public class ArticleAgentService {
      */
     @AgentExecution(value = "agent1_generate_titles", description = "生成标题方案")
     public void agent1GenerateTitleOptions(ArticleState state) {
+        String ragContextSection = buildRagContextSection(state.getRagContext());
         String prompt = PromptConstant.AGENT1_TITLE_PROMPT
                 .replace("{topic}", state.getTopic())
+                .replace("{ragContext}", ragContextSection)
                 + getStylePrompt(state.getStyle());
 
         String content = callLlm(prompt);
@@ -133,6 +135,7 @@ public class ArticleAgentService {
                 new TypeToken<List<ArticleState.TitleOption>>(){}, 
                 "标题方案"
         );
+        //把标题选择放到Title中
         state.setTitleOptions(titleOptions);
         log.info("智能体1：标题方案生成成功, optionsCount={}", titleOptions.size());
     }
@@ -148,11 +151,13 @@ public class ArticleAgentService {
             descriptionSection = PromptConstant.AGENT2_DESCRIPTION_SECTION
                     .replace("{userDescription}", state.getUserDescription());
         }
-        
+
+        String ragContextSection = buildRagContextSection(state.getRagContext());
         String prompt = PromptConstant.AGENT2_OUTLINE_PROMPT
                 .replace("{mainTitle}", state.getTitle().getMainTitle())
                 .replace("{subTitle}", state.getTitle().getSubTitle())
                 .replace("{descriptionSection}", descriptionSection)
+                .replace("{ragContext}", ragContextSection)
                 + getStylePrompt(state.getStyle());
 
         String content = callLlmWithStreaming(prompt, streamHandler, SseMessageTypeEnum.AGENT2_STREAMING);
@@ -167,10 +172,12 @@ public class ArticleAgentService {
     @AgentExecution(value = "agent3_generate_content", description = "生成文章正文")
     public void agent3GenerateContent(ArticleState state, Consumer<String> streamHandler) {
         String outlineText = GsonUtils.toJson(state.getOutline().getSections());
+        String ragContextSection = buildRagContextSection(state.getRagContext());
         String prompt = PromptConstant.AGENT3_CONTENT_PROMPT
                 .replace("{mainTitle}", state.getTitle().getMainTitle())
                 .replace("{subTitle}", state.getTitle().getSubTitle())
                 .replace("{outline}", outlineText)
+                .replace("{ragContext}", ragContextSection)
                 + getStylePrompt(state.getStyle());
 
         String content = callLlmWithStreaming(prompt, streamHandler, SseMessageTypeEnum.AGENT3_STREAMING);
@@ -286,6 +293,17 @@ public class ArticleAgentService {
     }
 
     // region 辅助方法
+
+    /**
+     * 构建 RAG 上下文 Prompt 片段
+     * 如果 ragContext 为空则返回空字符串
+     */
+    private String buildRagContextSection(String ragContext) {
+        if (ragContext == null || ragContext.isEmpty()) {
+            return "";
+        }
+        return PromptConstant.RAG_CONTEXT_SECTION.replace("{ragContext}", ragContext);
+    }
 
     /**
      * 调用 LLM（非流式）

@@ -79,6 +79,21 @@ public class ArticleState implements Serializable {
     private List<String> enabledImageMethods;
 
     /**
+     * 是否启用 RAG
+     */
+    private Boolean ragEnabled;
+
+    /**
+     * 关联的课程知识库 ID
+     */
+    private String kbId;
+
+    /**
+     * RAG 检索出的课程知识库上下文（后续阶段由检索流程写入）
+     */
+    private String ragContext;
+
+    /**
      * 标题方案
      */
     @Data

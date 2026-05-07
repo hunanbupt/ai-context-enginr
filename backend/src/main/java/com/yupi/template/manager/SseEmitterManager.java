@@ -17,6 +17,13 @@ import static com.yupi.template.constant.ArticleConstant.SSE_TIMEOUT_MS;
 
 /**
  * SSE emitter manager with sequence-based replay and streaming snapshots.
+ * 核心数据结构（SseEmitterManager）
+ * 字段	类型	说明
+ * emitterMap	Map<String, SseEmitter>	当前活跃的 SSE 连接
+ * messageBufferMap	Map<String, List<BufferedMessage>>	缓冲已发送的消息，最多 300 条
+ * streamingAccumulatorMap	Map<String, StringBuilder>	流式内容的累积文本
+ * seqMap	Map<String, AtomicLong>	每个 taskId 的自增序号
+ * taskLockMap	Map<String, Object>	每个 taskId 的锁对象
  */
 @Component
 @Slf4j
@@ -27,7 +34,7 @@ public class SseEmitterManager {
     private final Map<String, List<BufferedMessage>> messageBufferMap = new ConcurrentHashMap<>();
 
     private final Map<String, StringBuilder> streamingAccumulatorMap = new ConcurrentHashMap<>();
-
+//SSE 核心：创建/激活/发送/回放/完成 emitter，管理缓冲区、seq、流式累积器
     private final Map<String, AtomicLong> seqMap = new ConcurrentHashMap<>();
 
     private final Map<String, Object> taskLockMap = new ConcurrentHashMap<>();

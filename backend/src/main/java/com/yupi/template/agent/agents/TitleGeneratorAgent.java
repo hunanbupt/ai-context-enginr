@@ -33,6 +33,7 @@ public class TitleGeneratorAgent implements NodeAction {
 
     public static final String INPUT_TOPIC = "topic";
     public static final String INPUT_STYLE = "style";
+    public static final String INPUT_RAG_CONTEXT = "ragContext";
     public static final String OUTPUT_TITLE_OPTIONS = "titleOptions";
 
     @Override
@@ -40,16 +41,24 @@ public class TitleGeneratorAgent implements NodeAction {
         String topic = state.value(INPUT_TOPIC)
                 .map(Object::toString)
                 .orElseThrow(() -> new IllegalArgumentException("缺少选题参数"));
-        
+
         String style = state.value(INPUT_STYLE)
                 .map(Object::toString)
                 .orElse(null);
-        
+
+        String ragContext = state.value(INPUT_RAG_CONTEXT)
+                .map(Object::toString)
+                .orElse("");
+
         log.info("TitleGeneratorAgent 开始执行: topic={}, style={}", topic, style);
-        
+
+        // 构建 RAG 上下文片段
+        String ragContextSection = buildRagContextSection(ragContext);
+
         // 构建 prompt
         String prompt = PromptConstant.AGENT1_TITLE_PROMPT
                 .replace("{topic}", topic)
+                .replace("{ragContext}", ragContextSection)
                 + getStylePrompt(style);
         
         // 调用 LLM
@@ -65,6 +74,16 @@ public class TitleGeneratorAgent implements NodeAction {
         log.info("TitleGeneratorAgent 执行完成: 生成了 {} 个标题方案", titleOptions.size());
         
         return Map.of(OUTPUT_TITLE_OPTIONS, titleOptions);
+    }
+
+    /**
+     * 构建 RAG 上下文 Prompt 片段
+     */
+    private String buildRagContextSection(String ragContext) {
+        if (ragContext == null || ragContext.isEmpty()) {
+            return "";
+        }
+        return PromptConstant.RAG_CONTEXT_SECTION.replace("{ragContext}", ragContext);
     }
 
     /**

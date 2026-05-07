@@ -84,6 +84,16 @@ public class ArticleVO implements Serializable {
     private List<ImageItem> images;
 
     /**
+     * 关联的课程知识库 ID
+     */
+    private String kbId;
+
+    /**
+     * 是否启用 RAG
+     */
+    private Integer ragEnabled;
+
+    /**
      * 状态
      */
     private String status;

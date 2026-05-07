@@ -50,10 +50,16 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
     private ArticleAgentService articleAgentService;
 
     @Override
-    public String createArticleTask(String topic, String style, List<String> enabledImageMethods, User loginUser) {
+    public String createArticleTask(String topic, String style, List<String> enabledImageMethods, Boolean ragEnabled, String kbId, User loginUser) {
+        // RAG 参数校验
+        boolean isRagEnabled = ragEnabled != null && ragEnabled;
+        if (isRagEnabled && (kbId == null || kbId.trim().isEmpty())) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "启用 RAG 时知识库ID不能为空");
+        }
+
         // 处理配图方式：如果用户未选择，给普通用户设置默认的非 VIP 方式
         List<String> finalImageMethods = processImageMethods(enabledImageMethods, loginUser);
-        
+
         // 校验配图方式权限（普通用户不能使用 NANO_BANANA 和 SVG_DIAGRAM）
         validateImageMethods(finalImageMethods, loginUser);
 
@@ -66,25 +72,28 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
         article.setUserId(loginUser.getId());
         article.setTopic(topic);
         article.setStyle(style);
-        article.setEnabledImageMethods(finalImageMethods != null && !finalImageMethods.isEmpty() 
+        article.setEnabledImageMethods(finalImageMethods != null && !finalImageMethods.isEmpty()
                 ? GsonUtils.toJson(finalImageMethods) : null);
+        article.setRagEnabled(isRagEnabled ? 1 : 0);
+        article.setKbId(isRagEnabled ? kbId : null);
         article.setStatus(ArticleStatusEnum.PENDING.getValue());
         article.setPhase(ArticlePhaseEnum.PENDING.getValue());
         article.setCreateTime(LocalDateTime.now());
 
         this.save(article);
 
-        log.info("文章任务已创建, taskId={}, userId={}, style={}", taskId, loginUser.getId(), style);
+        log.info("文章任务已创建, taskId={}, userId={}, style={}, ragEnabled={}, kbId={}",
+                taskId, loginUser.getId(), style, isRagEnabled, kbId);
         return taskId;
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public String createArticleTaskWithQuotaCheck(String topic, String style, List<String> enabledImageMethods, User loginUser) {
+    public String createArticleTaskWithQuotaCheck(String topic, String style, List<String> enabledImageMethods, Boolean ragEnabled, String kbId, User loginUser) {
         // 在同一事务中：先扣配额，再创建任务
         // 如果任务创建失败，配额会自动回滚
         quotaService.checkAndConsumeQuota(loginUser);
-        return createArticleTask(topic, style, enabledImageMethods, loginUser);
+        return createArticleTask(topic, style, enabledImageMethods, ragEnabled, kbId, loginUser);
     }
 
     @Override

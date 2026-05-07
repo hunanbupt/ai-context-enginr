@@ -37,6 +37,7 @@ public class ContentGeneratorAgent implements NodeAction {
     public static final String INPUT_SUB_TITLE = "subTitle";
     public static final String INPUT_OUTLINE = "outline";
     public static final String INPUT_STYLE = "style";
+    public static final String INPUT_RAG_CONTEXT = "ragContext";
     public static final String OUTPUT_CONTENT = "content";
 
     @Override
@@ -44,11 +45,11 @@ public class ContentGeneratorAgent implements NodeAction {
         String mainTitle = state.value(INPUT_MAIN_TITLE)
                 .map(Object::toString)
                 .orElseThrow(() -> new IllegalArgumentException("缺少主标题参数"));
-        
+
         String subTitle = state.value(INPUT_SUB_TITLE)
                 .map(Object::toString)
                 .orElse("");
-        
+
         @SuppressWarnings("unchecked")
         ArticleState.OutlineResult outline = state.value(INPUT_OUTLINE)
                 .map(v -> {
@@ -58,19 +59,27 @@ public class ContentGeneratorAgent implements NodeAction {
                     return GsonUtils.fromJson(GsonUtils.toJson(v), ArticleState.OutlineResult.class);
                 })
                 .orElseThrow(() -> new IllegalArgumentException("缺少大纲参数"));
-        
+
         String style = state.value(INPUT_STYLE)
                 .map(Object::toString)
                 .orElse(null);
-        
+
+        String ragContext = state.value(INPUT_RAG_CONTEXT)
+                .map(Object::toString)
+                .orElse("");
+
         log.info("ContentGeneratorAgent 开始执行: mainTitle={}", mainTitle);
-        
+
+        // 构建 RAG 上下文片段
+        String ragContextSection = buildRagContextSection(ragContext);
+
         // 构建 prompt
         String outlineText = GsonUtils.toJson(outline.getSections());
         String prompt = PromptConstant.AGENT3_CONTENT_PROMPT
                 .replace("{mainTitle}", mainTitle)
                 .replace("{subTitle}", subTitle)
                 .replace("{outline}", outlineText)
+                .replace("{ragContext}", ragContextSection)
                 + getStylePrompt(style);
         
         // 获取流式处理器
@@ -107,6 +116,16 @@ public class ContentGeneratorAgent implements NodeAction {
                 .blockLast();
         
         return contentBuilder.toString();
+    }
+
+    /**
+     * 构建 RAG 上下文 Prompt 片段
+     */
+    private String buildRagContextSection(String ragContext) {
+        if (ragContext == null || ragContext.isEmpty()) {
+            return "";
+        }
+        return PromptConstant.RAG_CONTEXT_SECTION.replace("{ragContext}", ragContext);
     }
 
     /**

@@ -47,6 +47,9 @@ public class ArticleAsyncService {
     @Resource
     private ArticleService articleService;
 
+    @Resource
+    private RagService ragService;
+
     /**
      * 阶段1：异步生成标题方案
      *
@@ -70,7 +73,13 @@ public class ArticleAsyncService {
             state.setTaskId(taskId);
             state.setTopic(topic);
             state.setStyle(style);
-            
+
+            // 获取文章信息，构造 RAG 上下文
+            Article article = articleService.getByTaskId(taskId);
+            if (article != null) {
+                enrichStateWithRagContext(state, article, topic);
+            }
+
             // 执行阶段1：生成标题方案（根据配置选择执行方式）
             if (useOrchestrator) {
                 articleAgentOrchestrator.executePhase1_GenerateTitles(state, message -> {
@@ -133,13 +142,16 @@ public class ArticleAsyncService {
             state.setTaskId(taskId);
             state.setStyle(article.getStyle());
             state.setUserDescription(article.getUserDescription());
-            
+
+            // 构造 RAG 上下文
+            enrichStateWithRagContext(state, article, article.getTopic());
+
             // 设置标题
             ArticleState.TitleResult title = new ArticleState.TitleResult();
             title.setMainTitle(article.getMainTitle());
             title.setSubTitle(article.getSubTitle());
             state.setTitle(title);
-            
+
             // 执行阶段2：生成大纲（根据配置选择执行方式）
             if (useOrchestrator) {
                 articleAgentOrchestrator.executePhase2_GenerateOutline(state, message -> {
@@ -223,6 +235,9 @@ public class ArticleAsyncService {
             title.setSubTitle(article.getSubTitle());
             state.setTitle(title);
             
+            // 构造 RAG 上下文
+            enrichStateWithRagContext(state, article, article.getTopic());
+
             // 设置大纲
             List<ArticleState.OutlineSection> outlineSections = GsonUtils.fromJson(
                     article.getOutline(),
@@ -231,7 +246,7 @@ public class ArticleAsyncService {
             ArticleState.OutlineResult outlineResult = new ArticleState.OutlineResult();
             outlineResult.setSections(outlineSections);
             state.setOutline(outlineResult);
-            
+
             // 执行阶段3：生成正文+配图（根据配置选择执行方式）
             // 多智能体编排模式支持配图并行生成
             if (useOrchestrator) {
@@ -276,6 +291,7 @@ public class ArticleAsyncService {
 
     /**
      * 处理智能体消息并推送
+     *构建消息并调用 sseEmitterManager.send()
      */
     private void handleAgentMessage(String taskId, String message, ArticleState state) {
         // 累积流式内容，用于断线重连后的快照恢复
@@ -390,5 +406,42 @@ public class ArticleAsyncService {
         data.put("type", type.getValue());
         data.putAll(additionalData);
         sseEmitterManager.send(taskId, GsonUtils.toJson(data));
+    }
+
+    /**
+     * 根据文章 RAG 配置，检索知识库并写入 ArticleState
+     * RAG 检索失败不会中断文章生成，降级为空上下文
+     *
+     * @param state   文章状态对象
+     * @param article 文章实体
+     * @param query   检索查询文本（通常为文章选题）
+     */
+    private void enrichStateWithRagContext(ArticleState state, Article article, String query) {
+        boolean isRagEnabled = article.getRagEnabled() != null && article.getRagEnabled() == 1;
+        state.setRagEnabled(isRagEnabled);
+        state.setKbId(article.getKbId());
+        state.setRagContext("");
+
+        // ragEnabled=false 或 kbId 为空时不检索
+        if (!isRagEnabled || article.getKbId() == null || article.getKbId().trim().isEmpty()) {
+            return;
+        }
+
+        try {
+            String ragContext = ragService.buildRagContextByUserId(
+                    article.getKbId(), query, null, article.getUserId());
+            if (ragContext != null && !ragContext.isEmpty()) {
+                state.setRagContext(ragContext);
+                log.info("RAG 上下文已注入, taskId={}, kbId={}, contextLength={}",
+                        article.getTaskId(), article.getKbId(), ragContext.length());
+            } else {
+                log.info("RAG 检索无结果, taskId={}, kbId={}, query={}",
+                        article.getTaskId(), article.getKbId(), query);
+            }
+        } catch (Exception e) {
+            log.warn("RAG 检索失败，降级为空上下文, taskId={}, kbId={}, query={}",
+                    article.getTaskId(), article.getKbId(), query, e);
+            state.setRagContext("");
+        }
     }
 }

@@ -70,6 +70,7 @@ public class ArticleAgentOrchestrator {
     private static final String KEY_IMAGES = "images";
     private static final String KEY_FULL_CONTENT = "fullContent";
     private static final String KEY_ENABLED_IMAGE_METHODS = "enabledImageMethods";
+    private static final String KEY_RAG_CONTEXT = "ragContext";
 
     // endregion
 
@@ -88,7 +89,8 @@ public class ArticleAgentOrchestrator {
             inputs.put(KEY_TASK_ID, state.getTaskId());
             inputs.put(KEY_TOPIC, state.getTopic());
             inputs.put(KEY_STYLE, state.getStyle());
-            
+            inputs.put(KEY_RAG_CONTEXT, state.getRagContext() != null ? state.getRagContext() : "");
+
             // 构建并执行图
             StateGraph graph = buildPhase1Graph();
             CompiledGraph compiledGraph = graph.compile();
@@ -140,7 +142,8 @@ public class ArticleAgentOrchestrator {
             inputs.put(KEY_SUB_TITLE, state.getTitle().getSubTitle());
             inputs.put(KEY_USER_DESCRIPTION, state.getUserDescription());
             inputs.put(KEY_STYLE, state.getStyle());
-            
+            inputs.put(KEY_RAG_CONTEXT, state.getRagContext() != null ? state.getRagContext() : "");
+
             // 构建并执行图
             StateGraph graph = buildPhase2Graph();
             CompiledGraph compiledGraph = graph.compile();
@@ -200,7 +203,8 @@ public class ArticleAgentOrchestrator {
             inputs.put(KEY_OUTLINE, state.getOutline());
             inputs.put(KEY_STYLE, state.getStyle());
             inputs.put(KEY_ENABLED_IMAGE_METHODS, state.getEnabledImageMethods());
-            
+            inputs.put(KEY_RAG_CONTEXT, state.getRagContext() != null ? state.getRagContext() : "");
+
             // 构建并执行图
             StateGraph graph = buildPhase3Graph();
             CompiledGraph compiledGraph = graph.compile();
@@ -345,6 +349,7 @@ public class ArticleAgentOrchestrator {
             strategies.put(KEY_IMAGES, new ReplaceStrategy());
             strategies.put(KEY_FULL_CONTENT, new ReplaceStrategy());
             strategies.put(KEY_ENABLED_IMAGE_METHODS, new ReplaceStrategy());
+            strategies.put(KEY_RAG_CONTEXT, new ReplaceStrategy());
             return strategies;
         };
     }

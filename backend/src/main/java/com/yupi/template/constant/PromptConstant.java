@@ -8,14 +8,28 @@ package com.yupi.template.constant;
 public interface PromptConstant {
 
     /**
+     * RAG 课程知识库参考资料的 Prompt 片段
+     * 如果 {ragContext} 不为空，则包含课程参考资料及使用指引
+     */
+    String RAG_CONTEXT_SECTION = """
+
+            【课程知识库参考资料】
+            {ragContext}
+            参考资料使用指引：
+            - 如果以上参考资料不为空，请优先结合参考资料中的专业知识进行创作
+            - 标题要适合选修课教学内容，体现课程知识体系的核心主题
+            - 如果参考资料为空，则按原始选题正常创作
+            - 不要编造参考资料中没有依据的专业事实、数据或结论
+            """;
+
+    /**
      * 智能体1：生成标题方案
      */
     String AGENT1_TITLE_PROMPT = """
             你是一位爆款文章标题专家,擅长创作吸引人的标题。
-            
+
             根据以下选题,生成 3-5 个爆款文章标题方案:
-            选题：{topic}
-            
+            选题：{topic}{ragContext}
             要求:
             1. 每个方案包含主标题和副标题
             2. 主标题要包含数字、情绪化词汇,吸引眼球
@@ -23,7 +37,7 @@ public interface PromptConstant {
             4. 标题要简洁有力,不超过30字
             5. 不同方案要有不同的切入角度
             6. 符合新媒体爆款文章的风格
-            
+
             请直接返回 JSON 格式,不要有其他内容:
             [
               {
@@ -46,18 +60,17 @@ public interface PromptConstant {
      */
     String AGENT2_OUTLINE_PROMPT = """
             你是一位专业的文章策划师,擅长设计文章结构。
-            
+
             根据以下标题,生成文章大纲:
             主标题：{mainTitle}
             副标题：{subTitle}
-            {descriptionSection}
-            
+            {descriptionSection}{ragContext}
             要求:
-            1. 大纲要有清晰的逻辑结构
+            1. 大纲要有清晰的逻辑结构，体现教学逻辑：引入概念 → 核心知识点讲解 → 案例分析 → 总结思考
             2. 包含开头引入、核心观点(3-5个)、结尾升华
             3. 每个章节要有明确的标题和核心要点(2-3个)
             4. 适合2000字左右的文章
-            
+
             请直接返回 JSON 格式,不要有其他内容:
             {
               "sections": [
@@ -117,21 +130,20 @@ public interface PromptConstant {
      * 智能体3：生成正文
      */
     String AGENT3_CONTENT_PROMPT = """
-            你是一位资深的内容创作者,擅长撰写优质文章。
-            
+            你是一位资深的内容创作者,擅长撰写优质课程讲义。
+
             根据以下大纲,创作文章正文:
             主标题：{mainTitle}
             副标题：{subTitle}
             大纲：
-            {outline}
-            
+            {outline}{ragContext}
             要求:
-            1. 内容要充实,每个章节300-400字
+            1. 内容要充实,每个章节3000-4000字，采用课程讲义风格，内容严谨适合教学
             2. 语言流畅,富有感染力
             3. 适当使用金句,增强可读性
             4. 添加过渡句,确保逻辑连贯
             5. 使用 Markdown 格式,章节使用 ## 标题
-            
+
             请直接返回 Markdown 格式的正文内容,不要有其他内容。
             """;
 
