@@ -74,6 +74,44 @@
                 </a-radio-group>
               </div>
 
+              <!-- RAG 知识库增强选择 -->
+              <div class="rag-section">
+                <div class="section-header">
+                  <span class="section-title">知识库增强</span>
+                  <span class="section-tip">（可选，使用课程资料辅助创作）</span>
+                </div>
+                <a-radio-group v-model:value="ragMode" class="rag-mode-group">
+                  <a-radio value="">默认</a-radio>
+                  <a-radio value="ON">强制</a-radio>
+                  <a-radio value="AUTO">自动</a-radio>
+                </a-radio-group>
+                <div v-if="ragMode === 'ON' || ragMode === 'AUTO'" class="kb-select-section">
+                  <a-select
+                    v-model:value="selectedKbId"
+                    :placeholder="ragMode === 'ON' ? '请选择知识库' : '可选，不选则自动匹配'"
+                    :loading="kbLoading"
+                    allow-clear
+                    :clearable="ragMode === 'AUTO'"
+                    class="kb-select"
+                  >
+                    <a-select-option
+                      v-for="kb in knowledgeBases"
+                      :key="kb.kbId"
+                      :value="kb.kbId"
+                    >
+                      <span class="kb-option-name">{{ kb.name }}</span>
+                      <span class="kb-option-meta">({{ kb.chunkCount || 0 }} 切片)</span>
+                    </a-select-option>
+                  </a-select>
+                  <div v-if="ragMode === 'AUTO'" class="rag-auto-hint">
+                    不选知识库时，系统将根据文章主题自动匹配最相关的知识库
+                  </div>
+                  <div v-if="ragMode === 'ON' && !selectedKbId" class="rag-on-warning">
+                    强制模式下请选择知识库，否则创建将失败
+                  </div>
+                </div>
+              </div>
+
               <!-- 配图方式选择 -->
               <div class="image-methods-section">
                 <div class="section-header">
@@ -600,7 +638,7 @@ import {
   FileTextOutlined,
   RollbackOutlined
 } from '@ant-design/icons-vue'
-import { createArticle, confirmTitle, confirmOutline, goBackPhase, getArticle } from '@/api/articleController'
+import { createArticle, confirmTitle, confirmOutline, goBackPhase, getArticle, listMyKnowledgeBase } from '@/api/articleController'
 import { connectSSE, closeSSE, type SSEMessage } from '@/utils/sse'
 import { isAdmin as checkIsAdmin, isVip as checkIsVip, hasQuota as checkHasQuota } from '@/utils/permission'
 import { marked } from 'marked'
@@ -644,6 +682,10 @@ const currentPhase = ref<string>('INPUT')  // INPUT, TITLE_SELECTING, OUTLINE_ED
 const topic = ref('')
 const selectedStyle = ref('')  // 选中的文章风格（空字符串表示默认）
 const selectedImageMethods = ref<string[]>([])  // 选中的配图方式（空数组表示全部）
+const ragMode = ref<string>('')  // RAG 模式：''(默认OFF) / 'ON' / 'AUTO'
+const selectedKbId = ref<string>()  // 选中的知识库 ID
+const knowledgeBases = ref<Array<{kbId: string, name: string, chunkCount?: number}>>([])  // 知识库列表
+const kbLoading = ref(false)  // 知识库列表加载中
 const isCreating = ref(false)
 const isCompleted = ref(false)
 const isStreaming = ref(false)
@@ -832,6 +874,12 @@ const startCreate = async () => {
     return
   }
 
+  // 校验：ON 模式必须选择知识库
+  if (ragMode.value === 'ON' && !selectedKbId.value) {
+    message.warning('强制模式下请选择知识库')
+    return
+  }
+
   isCreating.value = true
   currentStep.value = 0
   lastSeq.value = 0
@@ -840,10 +888,14 @@ const startCreate = async () => {
 
   try {
     // 创建任务
+    const isRagActive = ragMode.value === 'ON' || ragMode.value === 'AUTO'
     const res = await createArticle({
       topic: topic.value,
       style: selectedStyle.value || undefined,
-      enabledImageMethods: selectedImageMethods.value.length > 0 ? selectedImageMethods.value : undefined
+      enabledImageMethods: selectedImageMethods.value.length > 0 ? selectedImageMethods.value : undefined,
+      ragMode: ragMode.value || undefined,
+      ragEnabled: isRagActive || undefined,
+      kbId: selectedKbId.value || undefined
     })
     const newTaskId = res.data.data
     if (!newTaskId) {
@@ -1274,6 +1326,8 @@ const resetCreate = () => {
   currentPhase.value = 'INPUT'
   topic.value = ''
   selectedStyle.value = ''
+  ragMode.value = ''
+  selectedKbId.value = undefined
   titleOptions.value = []
   outline.value = []
   isCreating.value = false
@@ -1295,6 +1349,28 @@ const resetCreate = () => {
   }
 }
 
+// 获取知识库列表
+const fetchKnowledgeBases = async () => {
+  kbLoading.value = true
+  try {
+    const res = await listMyKnowledgeBase()
+    const list = res.data.data || []
+    // 只展示状态正常的知识库
+    knowledgeBases.value = list
+      .filter((kb: any) => kb.status === 'NORMAL')
+      .map((kb: any) => ({
+        kbId: kb.kbId,
+        name: kb.name,
+        chunkCount: kb.chunkCount
+      }))
+  } catch (e) {
+    console.warn('获取知识库列表失败:', e)
+    knowledgeBases.value = []
+  } finally {
+    kbLoading.value = false
+  }
+}
+
 // 组件挂载时检查路由参数，支持刷新后重连
 onMounted(() => {
   const existingTaskId = route.query.taskId as string
@@ -1305,6 +1381,9 @@ onMounted(() => {
   } else if (existingTopic) {
     topic.value = existingTopic
   }
+
+  // 加载知识库列表（不阻塞页面）
+  fetchKnowledgeBases()
 })
 
 // 组件卸载前关闭 SSE
@@ -1596,6 +1675,71 @@ onBeforeUnmount(() => {
 .style-group :deep(.ant-radio-wrapper-checked) {
   border-color: var(--color-primary);
   background: rgba(34, 197, 94, 0.08);
+}
+
+/* RAG 知识库增强选择 */
+.rag-section {
+  padding: 16px;
+  background: var(--color-background-secondary);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border-light);
+}
+
+.rag-mode-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.rag-mode-group :deep(.ant-radio-wrapper) {
+  margin: 0;
+  padding: 6px 12px;
+  background: white;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  transition: all 0.2s;
+}
+
+.rag-mode-group :deep(.ant-radio-wrapper:hover) {
+  border-color: var(--color-primary);
+  background: rgba(34, 197, 94, 0.04);
+}
+
+.rag-mode-group :deep(.ant-radio-wrapper-checked) {
+  border-color: var(--color-primary);
+  background: rgba(34, 197, 94, 0.08);
+}
+
+.kb-select-section {
+  margin-top: 12px;
+}
+
+.kb-select {
+  width: 100%;
+}
+
+.kb-option-name {
+  font-weight: 500;
+}
+
+.kb-option-meta {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin-left: 8px;
+}
+
+.rag-auto-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+
+.rag-on-warning {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #faad14;
+  line-height: 1.4;
 }
 
 /* 配图方式选择 */

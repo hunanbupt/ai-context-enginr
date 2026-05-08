@@ -51,6 +51,28 @@ declare namespace API {
     topic?: string
     style?: string
     enabledImageMethods?: string[]
+    ragMode?: string
+    ragEnabled?: boolean
+    kbId?: string
+  }
+
+  type KnowledgeBaseVO = {
+    id?: number
+    kbId?: string
+    name?: string
+    courseName?: string
+    description?: string
+    status?: string
+    documentCount?: number
+    chunkCount?: number
+    createTime?: string
+    updateTime?: string
+  }
+
+  type BaseResponseListKnowledgeBaseVO = {
+    code?: number
+    data?: KnowledgeBaseVO[]
+    message?: string
   }
 
   type ArticleQueryRequest = {

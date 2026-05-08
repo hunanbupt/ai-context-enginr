@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find \"C:\\\\\\\\Users\\\\\\\\hn\\\\\\\\Desktop\\\\\\\\JAVA\\\\\\\\zjg\\\\\\\\ai-content-engine\\\\\\\\backend\\\\\\\\src\" -name \"*.java\" -type f)",
+      "Bash(cd \"C:\\\\\\\\Users\\\\\\\\hn\\\\\\\\Desktop\\\\\\\\JAVA\\\\\\\\zjg\\\\\\\\ai-content-engine\\\\\\\\backend\")",
+      "Bash(mvn compile *)",
+      "Bash(ls -la \"C:\\\\\\\\Users\\\\\\\\hn\\\\\\\\Desktop\\\\\\\\JAVA\\\\\\\\zjg\\\\\\\\ai-content-engine\\\\\\\\backend\\\\\\\\src\\\\\\\\main\\\\\\\\java\\\\\\\\com\\\\\\\\yupi\\\\\\\\template\\\\\\\\rag\\\\\\\\\")",
+      "Bash(ls -la \"C:\\\\\\\\Users\\\\\\\\hn\\\\\\\\Desktop\\\\\\\\JAVA\\\\\\\\zjg\\\\\\\\ai-content-engine\\\\\\\\backend\\\\\\\\src\\\\\\\\main\\\\\\\\java\\\\\\\\com\\\\\\\\yupi\\\\\\\\template\\\\\\\\controller\\\\\\\\CourseDocumentController.java\")",
+      "Bash(ls -la \"C:\\\\\\\\Users\\\\\\\\hn\\\\\\\\Desktop\\\\\\\\JAVA\\\\\\\\zjg\\\\\\\\ai-content-engine\\\\\\\\backend\\\\\\\\src\\\\\\\\main\\\\\\\\java\\\\\\\\com\\\\\\\\yupi\\\\\\\\template\\\\\\\\service\\\\\\\\CourseDocumentService.java\")",
+      "Bash(ls -la \"C:\\\\\\\\Users\\\\\\\\hn\\\\\\\\Desktop\\\\\\\\JAVA\\\\\\\\zjg\\\\\\\\ai-content-engine\\\\\\\\backend\\\\\\\\src\\\\\\\\main\\\\\\\\java\\\\\\\\com\\\\\\\\yupi\\\\\\\\template\\\\\\\\service\\\\\\\\impl\\\\\\\\CourseDocumentServiceImpl.java\")"
+    ]
+  }
+}

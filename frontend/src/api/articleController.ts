@@ -129,6 +129,14 @@ export async function goBackPhase(
   })
 }
 
+/** 获取我的知识库列表 GET /course/kb/my/list */
+export async function listMyKnowledgeBase(options?: { [key: string]: any }) {
+  return request<API.BaseResponseListKnowledgeBaseVO>('/course/kb/my/list', {
+    method: 'GET',
+    ...(options || {}),
+  })
+}
+
 /** 获取文章生成进度(SSE) GET /article/progress/${param0} */
 export async function getProgress(
   // 叠加生成的Param类型 (非body参数swagger默认没有生成对象)
